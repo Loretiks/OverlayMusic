@@ -49,7 +49,7 @@
 Скачай `OverlayMusic-Setup-X.Y.Z.exe` из [Releases](../../releases) и запусти.<br>
 Установка per-user, не требует прав администратора. По желанию — отметь «Запускать при входе в Windows».
 
-### macOS (Apple Silicon — M1, M2, M3)
+### macOS (Apple Silicon)
 1. Скачай `OverlayMusic-arm64.dmg` из [Releases](../../releases)
 2. Открой .dmg, перетащи **OverlayMusic** в **Applications**
 3. Первый запуск: **ПКМ → Open** → подтверди (приложение не подписано Apple Developer ID — это безопасно, просто так требует Gatekeeper для не-AppStore приложений)
