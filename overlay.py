@@ -6,6 +6,7 @@ Default hotkey: Ctrl+Alt+S (configurable via tray -> Настройки).
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import threading
@@ -602,6 +603,73 @@ class CoverLabel(QLabel):
         self.setPixmap(out)
 
 
+class EqualizerOverlay(QWidget):
+    """Маленький эквалайзер 4 столбика — прыгает когда играет, замирает на паузе.
+    Рисуется поверх обложки в правом нижнем углу с тёмной pill-подложкой
+    для читаемости на любых обложках."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._bar_w = 3
+        self._gap = 3
+        self._bars = 4
+        self._inner_h = 14
+        pad_x, pad_y = 6, 4
+        w = self._bars * self._bar_w + (self._bars - 1) * self._gap + pad_x * 2
+        h = self._inner_h + pad_y * 2
+        self.setFixedSize(w, h)
+        self._pad_x = pad_x
+        self._pad_y = pad_y
+        self._t = 0.0
+        self._playing = False
+        self._timer = QTimer(self)
+        self._timer.setInterval(60)  # ~16 fps хватает для глифа 4×14
+        self._timer.timeout.connect(self._tick)
+
+    def set_playing(self, playing: bool) -> None:
+        if playing == self._playing:
+            return
+        self._playing = playing
+        if playing:
+            self._timer.start()
+        else:
+            self._timer.stop()
+            self.update()
+
+    def _tick(self) -> None:
+        self._t += 0.16
+        self.update()
+
+    def paintEvent(self, _) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        # Тёмная pill-подложка для контраста на светлых обложках.
+        bg = QColor(0, 0, 0, 130)
+        p.setPen(Qt.NoPen)
+        p.setBrush(bg)
+        r = self.height() / 2
+        p.drawRoundedRect(self.rect(), r, r)
+
+        bar_color = QColor(255, 255, 255, 235)
+        p.setBrush(bar_color)
+        for i in range(self._bars):
+            if self._playing:
+                # Разные фазы и частоты — каждый столбик живёт сам по себе.
+                phase = i * 1.1
+                freq = 1.5 + 0.35 * i
+                amp = 0.5 + 0.5 * math.sin(self._t * freq + phase)
+                amp = amp ** 0.7
+                ratio = 0.22 + 0.78 * amp
+            else:
+                ratio = 0.22  # короткие столбики на паузе
+            bh = max(2, int(self._inner_h * ratio))
+            x = self._pad_x + i * (self._bar_w + self._gap)
+            y = self._pad_y + (self._inner_h - bh)
+            br = self._bar_w / 2.0
+            p.drawRoundedRect(QRectF(x, y, self._bar_w, bh), br, br)
+
+
 class ProgressBar(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -994,6 +1062,7 @@ class OverlayWindow(QWidget):
         self._dragging = False
         self._drag_offset = QPoint()
         self._backdrop: QPixmap | None = None
+        self._cover_bytes: bytes | None = None
         self._accent: QColor = ACCENT_DEFAULT
         self._last_thumb_hash: int = 0
         self._transparent_mode: bool = bool(settings.get("transparent_mode"))
@@ -1029,6 +1098,15 @@ class OverlayWindow(QWidget):
 
         self.cover = CoverLabel(96)
         top.addWidget(self.cover, 0, Qt.AlignTop)
+
+        # Эквалайзер поверх обложки — правый нижний угол с небольшим отступом.
+        self.equalizer = EqualizerOverlay(self.cover)
+        eq_inset = 6
+        self.equalizer.move(
+            self.cover.width() - self.equalizer.width() - eq_inset,
+            self.cover.height() - self.equalizer.height() - eq_inset,
+        )
+        self.equalizer.hide()
 
         right = QVBoxLayout()
         right.setSpacing(0)
@@ -1211,14 +1289,14 @@ class OverlayWindow(QWidget):
         p.save()
         p.setClipPath(path)
 
-        # 1) Backdrop — blurred cover stretched to fill, OR neutral dark.
+        # 1) Backdrop — blurred cover, pre-rasterized at rect.size() in
+        # _rebuild_backdrop(). Drawn 1:1; rescale only if size briefly mismatches
+        # (e.g. between resize event and rebuild).
         if self._backdrop is not None and not self._backdrop.isNull():
-            scaled = self._backdrop.scaled(
-                rect.size(),
-                Qt.IgnoreAspectRatio,
-                Qt.SmoothTransformation,
-            )
-            p.drawPixmap(rect.topLeft(), scaled)
+            if self._backdrop.size() == rect.size():
+                p.drawPixmap(rect.topLeft(), self._backdrop)
+            else:
+                p.drawPixmap(rect, self._backdrop, QRectF(self._backdrop.rect()))
         else:
             # Subtle neutral fill leaning on accent for non-cover state.
             base = QColor(self._accent)
@@ -1264,21 +1342,29 @@ class OverlayWindow(QWidget):
         if h == self._last_thumb_hash:
             return
         self._last_thumb_hash = h
+        self._cover_bytes = thumb
         self.cover.set_bytes(thumb)
-        # Backdrop blur (sized to current window — repaint on resize handled below).
-        w, hgt = max(self.width(), 200), max(self.height(), 120)
-        self._backdrop = make_backdrop(thumb, w, hgt)
+        self._rebuild_backdrop()
         self._accent = extract_accent(thumb)
         self.progress.set_accent(self._accent)
         self.play_btn.set_accent(self._accent)
         self.update()
 
+    def _rebuild_backdrop(self) -> None:
+        """Render backdrop pixmap exactly at the painted rect size, so paintEvent
+        can drawPixmap() with no per-frame SmoothTransformation rescale (this was
+        the cause of the drag lag — every mouse move triggered a full smooth
+        rescale of the blurred cover)."""
+        if not self._cover_bytes:
+            self._backdrop = None
+            return
+        w = max(self.width() - 4, 16)
+        h = max(self.height() - 4, 16)
+        self._backdrop = make_backdrop(self._cover_bytes, w, h)
+
     def resizeEvent(self, e):
-        # Re-rasterize backdrop at new size for crisp blur.
-        if self._last_thumb_hash:
-            # We don't keep raw bytes — backdrop already smooth-scaled in paint.
-            pass
         super().resizeEvent(e)
+        self._rebuild_backdrop()
 
     # --- info update -----------------------------------------------------
     def apply_info(self, info: dict) -> None:
@@ -1291,6 +1377,8 @@ class OverlayWindow(QWidget):
             self.time_dur.setText("0:00")
             self.play_btn.set_kind("play")
             self._set_paused_state(True)
+            self.equalizer.hide()
+            self.equalizer.set_playing(False)
             return
 
         title = info.get("title") or "—"
@@ -1316,6 +1404,9 @@ class OverlayWindow(QWidget):
         playing = bool(info.get("is_playing"))
         self.play_btn.set_kind("pause" if playing else "play")
         self._set_paused_state(not playing)
+        self.equalizer.show()
+        self.equalizer.set_playing(playing)
+        self.equalizer.raise_()
 
 
 def _fmt(seconds: float) -> str:
