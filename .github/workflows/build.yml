@@ -68,45 +68,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
+          brew install media-control create-dmg
 
-      - name: Build .app
+      - name: Build .app + .dmg
         run: |
-          pyinstaller --noconfirm --windowed --name OverlayMusic \
-            --osx-bundle-identifier com.melanholy.overlaymusic \
-            --hidden-import _platform_mac \
-            --exclude-module _platform_win \
-            overlay.py
-
-      - name: Ad-hoc codesign
-        run: |
-          codesign --force --deep --sign - dist/OverlayMusic.app
-          codesign --verify --verbose dist/OverlayMusic.app || true
-
-      - name: Install create-dmg
-        run: brew install create-dmg
-
-      - name: Build .dmg
-        run: |
-          mkdir -p dmg-out
-          create-dmg \
-            --volname "OverlayMusic" \
-            --window-pos 200 120 \
-            --window-size 540 380 \
-            --icon-size 96 \
-            --icon "OverlayMusic.app" 140 180 \
-            --hide-extension "OverlayMusic.app" \
-            --app-drop-link 400 180 \
-            --no-internet-enable \
-            "dmg-out/OverlayMusic-arm64.dmg" \
-            "dist/OverlayMusic.app" \
-            || true
-          # create-dmg иногда возвращает non-zero даже при успехе → проверим файл.
-          ls -la dmg-out/
+          chmod +x build-mac.sh
+          ./build-mac.sh
 
       - uses: actions/upload-artifact@v4
         with:
           name: OverlayMusic-macOS
-          path: dmg-out/*.dmg
+          path: dist/OverlayMusic-arm64.dmg
 
   release:
     name: Publish release
@@ -124,7 +96,7 @@ jobs:
           files: |
             artifacts/OverlayMusic-Windows/dist/OverlayMusic.exe
             artifacts/OverlayMusic-Windows/installer/*.exe
-            artifacts/OverlayMusic-macOS/*.dmg
+            artifacts/OverlayMusic-macOS/OverlayMusic-arm64.dmg
           draft: false
           prerelease: false
           generate_release_notes: true

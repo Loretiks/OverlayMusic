@@ -1,4 +1,4 @@
-"""OverlayMusic — always-on-top music overlay for games (Win SMTC / Mac MediaRemote).
+"""OverlayMusic — поверх игр, управление через Windows SMTC.
 
 Default hotkey: Ctrl+Alt+S (configurable via tray -> Настройки).
 """
@@ -30,6 +30,8 @@ if sys.platform == "darwin":
         MediaController,
         HotkeyManager,
         force_foreground,
+        is_accessibility_trusted,
+        request_accessibility,
         BACKEND_ERR as _BACKEND_ERR,
     )
 else:
@@ -39,6 +41,12 @@ else:
         force_foreground,
         BACKEND_ERR as _BACKEND_ERR,
     )
+
+    def is_accessibility_trusted() -> bool:
+        return True
+
+    def request_accessibility(prompt: bool = True) -> bool:
+        return True
 
 from PySide6.QtCore import (
     Qt,
@@ -102,7 +110,9 @@ APP_NAME = "OverlayMusic"
 DEFAULT_DISCORD_CLIENT_ID = "1499319405752881212"
 
 DEFAULT_SETTINGS = {
-    "hotkey_toggle": "Ctrl+Alt+S",
+    # On macOS, Qt swaps Ctrl/Meta in QKeySequence: "Ctrl+Alt+]" here means
+    # the physical Cmd+Opt+] keys.
+    "hotkey_toggle": "Ctrl+Alt+]" if sys.platform == "darwin" else "Ctrl+Alt+S",
     "hotkey_prev": "Left",
     "hotkey_next": "Right",
     "hotkey_playpause": "Down",
@@ -1335,6 +1345,13 @@ class App(QObject):
 
         self.hotkey = HotkeyManager()
         self.hotkey.triggered.connect(self.toggle_window)
+        if sys.platform == "darwin":
+            try:
+                from _platform_mac import _dlog as _mac_dlog  # type: ignore
+                _mac_dlog(f"app startup: hotkey_setting={self.settings['hotkey_toggle']!r}")
+            except Exception:
+                pass
+        # Carbon RegisterEventHotKey doesn't need any permission — register directly.
         ok = self.hotkey.start(self.settings["hotkey_toggle"])
 
         self.tray = QSystemTrayIcon(make_tray_icon(), self)
