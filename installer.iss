@@ -1,11 +1,11 @@
-; Inno Setup script for SpotifyOverlay
+; Inno Setup script for OverlayMusic
 ; Build: run `build-installer.bat` (it calls ISCC.exe).
 
-#define MyAppName       "Spotify Overlay"
-#define MyAppShortName  "SpotifyOverlay"
+#define MyAppName       "Overlay Music"
+#define MyAppShortName  "OverlayMusic"
 #define MyAppVersion    "1.0.0"
 #define MyAppPublisher  "Ilyushka"
-#define MyAppExeName    "SpotifyOverlay.exe"
+#define MyAppExeName    "OverlayMusic.exe"
 
 [Setup]
 ; Stable AppId — keep this exact value across releases so upgrades work.
@@ -52,7 +52,7 @@ Name: "autostart"; \
     Flags: unchecked
 
 [Files]
-Source: "dist\SpotifyOverlay.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\OverlayMusic.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -60,7 +60,7 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
-    ValueType: string; ValueName: "SpotifyOverlay"; \
+    ValueType: string; ValueName: "OverlayMusic"; \
     ValueData: """{app}\{#MyAppExeName}"""; \
     Tasks: autostart; \
     Flags: uninsdeletevalue
@@ -73,4 +73,4 @@ Filename: "{app}\{#MyAppExeName}"; \
 [UninstallRun]
 ; Try to stop the app on uninstall (ignore failure — process may not be running).
 Filename: "taskkill.exe"; Parameters: "/F /IM {#MyAppExeName}"; \
-    Flags: runhidden; RunOnceId: "KillSpotifyOverlay"
+    Flags: runhidden; RunOnceId: "KillOverlayMusic"

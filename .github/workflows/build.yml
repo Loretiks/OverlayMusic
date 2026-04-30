@@ -1,0 +1,130 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # для создания Releases на тегах
+
+jobs:
+  build-windows:
+    name: Windows .exe + installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build .exe
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --name OverlayMusic `
+            --collect-all winrt `
+            --hidden-import _platform_win `
+            --exclude-module _platform_mac `
+            overlay.py
+
+      - name: Install Inno Setup
+        run: |
+          choco install innosetup --no-progress -y
+
+      - name: Build installer
+        shell: cmd
+        run: |
+          if not exist installer mkdir installer
+          "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" installer.iss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OverlayMusic-Windows
+          path: |
+            dist/OverlayMusic.exe
+            installer/OverlayMusic-Setup-*.exe
+
+  build-macos:
+    name: macOS .dmg (Apple Silicon)
+    runs-on: macos-14   # arm64 / Apple Silicon runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build .app
+        run: |
+          pyinstaller --noconfirm --windowed --name OverlayMusic \
+            --osx-bundle-identifier com.melanholy.overlaymusic \
+            --hidden-import _platform_mac \
+            --exclude-module _platform_win \
+            overlay.py
+
+      - name: Ad-hoc codesign
+        run: |
+          codesign --force --deep --sign - dist/OverlayMusic.app
+          codesign --verify --verbose dist/OverlayMusic.app || true
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Build .dmg
+        run: |
+          mkdir -p dmg-out
+          create-dmg \
+            --volname "OverlayMusic" \
+            --window-pos 200 120 \
+            --window-size 540 380 \
+            --icon-size 96 \
+            --icon "OverlayMusic.app" 140 180 \
+            --hide-extension "OverlayMusic.app" \
+            --app-drop-link 400 180 \
+            --no-internet-enable \
+            "dmg-out/OverlayMusic-arm64.dmg" \
+            "dist/OverlayMusic.app" \
+            || true
+          # create-dmg иногда возвращает non-zero даже при успехе → проверим файл.
+          ls -la dmg-out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OverlayMusic-macOS
+          path: dmg-out/*.dmg
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/OverlayMusic-Windows/dist/OverlayMusic.exe
+            artifacts/OverlayMusic-Windows/installer/*.exe
+            artifacts/OverlayMusic-macOS/*.dmg
+          draft: false
+          prerelease: false
+          generate_release_notes: true

@@ -1,4 +1,4 @@
-"""Spotify overlay — поверх игр, управление через Windows SMTC.
+"""OverlayMusic — always-on-top music overlay for games (Win SMTC / Mac MediaRemote).
 
 Default hotkey: Ctrl+Alt+S (configurable via tray -> Настройки).
 """
@@ -93,7 +93,7 @@ from PySide6.QtWidgets import (
 # --------------------------------------------------------------------------
 # Settings
 # --------------------------------------------------------------------------
-APP_NAME = "SpotifyOverlay"
+APP_NAME = "OverlayMusic"
 
 # Discord Application ID — зашит дефолтом, поле в настройках можно не трогать.
 # Это твоё личное приложение на discord.com/developers (имя "Melanholy").
@@ -824,7 +824,7 @@ class IconButton(QPushButton):
 class SettingsDialog(QDialog):
     def __init__(self, settings: dict, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Настройки — Spotify Overlay")
+        self.setWindowTitle("Настройки — OverlayMusic")
         self.setMinimumWidth(420)
         root = QVBoxLayout(self)
         root.setSpacing(6)
@@ -1338,7 +1338,7 @@ class App(QObject):
         ok = self.hotkey.start(self.settings["hotkey_toggle"])
 
         self.tray = QSystemTrayIcon(make_tray_icon(), self)
-        self.tray.setToolTip(f"Spotify Overlay ({self.settings['hotkey_toggle']})")
+        self.tray.setToolTip(f"OverlayMusic ({self.settings['hotkey_toggle']})")
         menu = QMenu()
         menu.addAction("Показать / скрыть").triggered.connect(self.toggle_window)
         menu.addAction("Настройки…").triggered.connect(self.open_settings)
@@ -1350,14 +1350,14 @@ class App(QObject):
 
         if _BACKEND_ERR:
             self.tray.showMessage(
-                "Spotify Overlay",
+                "OverlayMusic",
                 "Backend SMTC не загружен. Управление недоступно.",
                 QSystemTrayIcon.Warning,
                 5000,
             )
         elif not ok:
             self.tray.showMessage(
-                "Spotify Overlay",
+                "OverlayMusic",
                 f"Не удалось зарегистрировать хоткей «{self.settings['hotkey_toggle']}».\n"
                 "Откройте настройки через значок в трее.",
                 QSystemTrayIcon.Warning,
@@ -1365,7 +1365,7 @@ class App(QObject):
             )
         else:
             self.tray.showMessage(
-                "Spotify Overlay",
+                "OverlayMusic",
                 f"Запущен. Нажмите {self.settings['hotkey_toggle']} для показа.",
                 QSystemTrayIcon.Information,
                 3000,
@@ -1431,7 +1431,7 @@ class App(QObject):
         toggle_mods, toggle_vk = parse_hotkey(new["hotkey_toggle"])
         if toggle_vk is None:
             self.tray.showMessage(
-                "Spotify Overlay",
+                "OverlayMusic",
                 "Невалидный глобальный хоткей.",
                 QSystemTrayIcon.Warning, 3000)
             return
@@ -1445,15 +1445,15 @@ class App(QObject):
         )
 
         ok = self.hotkey.start(new["hotkey_toggle"])
-        self.tray.setToolTip(f"Spotify Overlay ({new['hotkey_toggle']})")
+        self.tray.setToolTip(f"OverlayMusic ({new['hotkey_toggle']})")
         if not ok:
             self.tray.showMessage(
-                "Spotify Overlay",
+                "OverlayMusic",
                 f"Хоткей «{new['hotkey_toggle']}» уже занят системой или другим приложением.",
                 QSystemTrayIcon.Warning, 4000)
         else:
             self.tray.showMessage(
-                "Spotify Overlay", "Настройки сохранены.",
+                "OverlayMusic", "Настройки сохранены.",
                 QSystemTrayIcon.Information, 2000)
 
     def quit(self) -> None:

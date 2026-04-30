@@ -16,7 +16,7 @@ echo.
 echo [2/3] Cleaning previous build...
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
-if exist SpotifyOverlay.spec del /q SpotifyOverlay.spec
+if exist OverlayMusic.spec del /q OverlayMusic.spec
 
 echo.
 echo [3/3] Building exe (this may take a couple of minutes)...
@@ -24,14 +24,14 @@ echo [3/3] Building exe (this may take a couple of minutes)...
     --noconfirm ^
     --onefile ^
     --windowed ^
-    --name "SpotifyOverlay" ^
+    --name "OverlayMusic" ^
     --collect-all winrt ^
     overlay.py
 if errorlevel 1 goto :error
 
 echo.
 echo ====================================================
-echo  Done! File: dist\SpotifyOverlay.exe
+echo  Done! File: dist\OverlayMusic.exe
 echo  You can copy it anywhere and run from there.
 echo ====================================================
 echo.

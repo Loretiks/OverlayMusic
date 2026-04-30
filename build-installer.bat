@@ -3,12 +3,12 @@ setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
 rem --- 1. Make sure exe is built --------------------------------------
-if not exist "dist\SpotifyOverlay.exe" (
+if not exist "dist\OverlayMusic.exe" (
     echo [1/2] Building exe first...
     call build.bat
     if errorlevel 1 exit /b 1
 ) else (
-    echo [1/2] dist\SpotifyOverlay.exe already exists — skipping rebuild.
+    echo [1/2] dist\OverlayMusic.exe already exists — skipping rebuild.
     echo       Delete the dist\ folder if you want a fresh exe.
 )
 
@@ -45,7 +45,7 @@ if errorlevel 1 (
 
 echo.
 echo ====================================================
-echo  Done! See installer\SpotifyOverlay-Setup-*.exe
+echo  Done! See installer\OverlayMusic-Setup-*.exe
 echo ====================================================
 echo.
 pause

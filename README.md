@@ -1,4 +1,4 @@
-<h1 align="center">SpotifyOverlay</h1>
+<h1 align="center">OverlayMusic</h1>
 
 <p align="center">
   <em>Лёгкий always-on-top оверлей для управления музыкой поверх любой игры — Windows и macOS.<br>
@@ -6,8 +6,8 @@
 </p>
 
 <p align="center">
-  <a href="../../actions/workflows/build.yml"><img src="https://github.com/Loretiks/SpotifyOverlay/actions/workflows/build.yml/badge.svg" alt="Build"></a>
-  <a href="../../releases/latest"><img src="https://img.shields.io/github/v/release/Loretiks/SpotifyOverlay?include_prereleases" alt="Release"></a>
+  <a href="../../actions/workflows/build.yml"><img src="https://github.com/Loretiks/OverlayMusic/actions/workflows/build.yml/badge.svg" alt="Build"></a>
+  <a href="../../releases/latest"><img src="https://img.shields.io/github/v/release/Loretiks/OverlayMusic?include_prereleases" alt="Release"></a>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-blue" alt="Platform">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
 </p>
@@ -46,18 +46,18 @@
 ## Установка
 
 ### Windows
-Скачай `SpotifyOverlay-Setup-X.Y.Z.exe` из [Releases](../../releases) и запусти.<br>
+Скачай `OverlayMusic-Setup-X.Y.Z.exe` из [Releases](../../releases) и запусти.<br>
 Установка per-user, не требует прав администратора. По желанию — отметь «Запускать при входе в Windows».
 
 ### macOS (Apple Silicon — M1, M2, M3)
-1. Скачай `SpotifyOverlay-arm64.dmg` из [Releases](../../releases)
-2. Открой .dmg, перетащи **SpotifyOverlay** в **Applications**
+1. Скачай `OverlayMusic-arm64.dmg` из [Releases](../../releases)
+2. Открой .dmg, перетащи **OverlayMusic** в **Applications**
 3. Первый запуск: **ПКМ → Open** → подтверди (приложение не подписано Apple Developer ID — это безопасно, просто так требует Gatekeeper для не-AppStore приложений)
 4. Дай разрешение **Accessibility** в `System Settings → Privacy & Security → Accessibility` — нужно для глобального хоткея
 
 Если приложение совсем не запускается:
 ```bash
-xattr -dr com.apple.quarantine /Applications/SpotifyOverlay.app
+xattr -dr com.apple.quarantine /Applications/OverlayMusic.app
 ```
 
 ## Использование
@@ -86,8 +86,8 @@ xattr -dr com.apple.quarantine /Applications/SpotifyOverlay.app
 ## Сборка из исходников
 
 ```bash
-git clone https://github.com/Loretiks/SpotifyOverlay.git
-cd SpotifyOverlay
+git clone https://github.com/Loretiks/OverlayMusic.git
+cd OverlayMusic
 python -m venv .venv
 # Windows: .venv\Scripts\activate
 # macOS:   source .venv/bin/activate
@@ -97,16 +97,16 @@ python overlay.py
 
 ### Сборка `.exe` (Windows)
 ```cmd
-build.bat              # генерит dist\SpotifyOverlay.exe
+build.bat              # генерит dist\OverlayMusic.exe
 build-installer.bat    # дополнительно собирает Inno Setup .exe
 ```
 
 ### Сборка `.app` (macOS)
 ```bash
 pip install pyinstaller
-pyinstaller --noconfirm --windowed --name SpotifyOverlay \
+pyinstaller --noconfirm --windowed --name OverlayMusic \
   --hidden-import _platform_mac --exclude-module _platform_win overlay.py
-codesign --force --deep --sign - dist/SpotifyOverlay.app
+codesign --force --deep --sign - dist/OverlayMusic.app
 ```
 
 Готовые сборки для обеих ОС появляются автоматически в [Releases](../../releases) после каждого тега вида `v1.2.3` — собираются GitHub Actions.
