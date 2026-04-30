@@ -27,9 +27,9 @@ SolidCompression=yes
 WizardStyle=modern
 ShowLanguageDialog=no
 
-; Per-user install — no admin prompt, but allow elevation if user prefers Program Files.
-PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
+; Admin install — нужен и для записи в Program Files, и для создания
+; Scheduled Task с /RL HIGHEST (только админы могут это сделать).
+PrivilegesRequired=admin
 
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -44,12 +44,10 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; \
     Description: "{cm:CreateDesktopIcon}"; \
-    GroupDescription: "{cm:AdditionalIcons}"; \
-    Flags: unchecked
+    GroupDescription: "{cm:AdditionalIcons}"
 Name: "autostart"; \
-    Description: "Запускать при входе в Windows"; \
-    GroupDescription: "Дополнительно:"; \
-    Flags: unchecked
+    Description: "Автозапуск при входе в Windows (от имени администратора, без UAC-промпта)"; \
+    GroupDescription: "Дополнительно:"
 
 [Files]
 Source: "dist\OverlayMusic.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -58,19 +56,28 @@ Source: "dist\OverlayMusic.exe"; DestDir: "{app}"; Flags: ignoreversion
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
-[Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
-    ValueType: string; ValueName: "OverlayMusic"; \
-    ValueData: """{app}\{#MyAppExeName}"""; \
-    Tasks: autostart; \
-    Flags: uninsdeletevalue
-
 [Run]
+; Создаём Scheduled Task: запуск с highest privileges при логине пользователя.
+; /RL HIGHEST + /SC ONLOGON = запускается автоматически как админ без UAC-промпта.
+Filename: "{sys}\schtasks.exe"; \
+    Parameters: "/Create /TN ""{#MyAppShortName}"" /TR ""\""{app}\{#MyAppExeName}\"""" /SC ONLOGON /RL HIGHEST /F"; \
+    Tasks: autostart; \
+    Flags: runhidden
+
+; После установки запускаем приложение (от имени админа, через ту же задачу).
+Filename: "{sys}\schtasks.exe"; \
+    Parameters: "/Run /TN ""{#MyAppShortName}"""; \
+    Tasks: autostart; \
+    Flags: runhidden nowait postinstall skipifsilent
+; Если автостарт не выбран — просто запускаем .exe (запросит UAC).
 Filename: "{app}\{#MyAppExeName}"; \
     Description: "Запустить {#MyAppName}"; \
-    Flags: nowait postinstall skipifsilent
+    Flags: nowait postinstall skipifsilent unchecked
 
 [UninstallRun]
-; Try to stop the app on uninstall (ignore failure — process may not be running).
+; Сначала останавливаем процесс.
 Filename: "taskkill.exe"; Parameters: "/F /IM {#MyAppExeName}"; \
     Flags: runhidden; RunOnceId: "KillOverlayMusic"
+; Удаляем Scheduled Task.
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""{#MyAppShortName}"" /F"; \
+    Flags: runhidden; RunOnceId: "DelOverlayMusicTask"

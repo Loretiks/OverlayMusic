@@ -30,7 +30,7 @@ jobs:
 
       - name: Build .exe
         run: |
-          pyinstaller --noconfirm --onefile --windowed --name OverlayMusic `
+          pyinstaller --noconfirm --onefile --windowed --uac-admin --name OverlayMusic `
             --collect-all winrt `
             --hidden-import _platform_win `
             --exclude-module _platform_mac `

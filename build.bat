@@ -24,8 +24,11 @@ echo [3/3] Building exe (this may take a couple of minutes)...
     --noconfirm ^
     --onefile ^
     --windowed ^
+    --uac-admin ^
     --name "OverlayMusic" ^
     --collect-all winrt ^
+    --hidden-import _platform_win ^
+    --exclude-module _platform_mac ^
     overlay.py
 if errorlevel 1 goto :error
 
