@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import subprocess
 import threading
 import time
 from ctypes import wintypes
@@ -403,3 +404,194 @@ class MediaController(QObject):
             self._loop.call_soon_threadsafe(self._loop.stop)
         except Exception:
             pass
+
+
+# --------------------------------------------------------------------------
+# NPSMSvc watchdog
+# --------------------------------------------------------------------------
+# Системная служба «Now Playing Session Manager» (NPSMSvc_<sessionid>) —
+# обслуживает SMTC-сессии. У неё есть известный баг: после некорректного
+# disconnect какого-то клиента (типичный сценарий — закрытая вкладка Edge с
+# активной media-session) служба застревает в high-CPU/high-memory loop —
+# до 100% одного ядра и сотни МБ. Лечится только рестартом службы.
+#
+# Watchdog раз в 15 сек измеряет % CPU процесса службы через GetProcessTimes
+# (cheap, без spawning subprocess'а). Если 2 раза подряд видим > порога —
+# рестартуем службу (Restart-Service из PowerShell, требует админа — у нас
+# есть благодаря scheduled task /RL HIGHEST). После рестарта — cooldown 5 мин
+# чтобы не зацикливаться.
+#
+# CPU нормирован на одно ядро. Threshold 30% = «занимает треть одного ядра» —
+# это на порядок выше любой нормальной фоновой активности NPSMSvc, у которой
+# в healthy-состоянии CPU = 0.
+
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+
+class _FILETIME(ctypes.Structure):
+    _fields_ = [
+        ("dwLowDateTime", wintypes.DWORD),
+        ("dwHighDateTime", wintypes.DWORD),
+    ]
+
+
+def _ft_to_us(ft: _FILETIME) -> float:
+    """FILETIME (100-ns ticks) → microseconds."""
+    return ((ft.dwHighDateTime << 32) | ft.dwLowDateTime) / 10.0
+
+
+def _get_process_cpu_us(pid: int) -> float | None:
+    h = ctypes.windll.kernel32.OpenProcess(
+        PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+    )
+    if not h:
+        return None
+    try:
+        creation, exit_, kernel, user_t = (
+            _FILETIME(), _FILETIME(), _FILETIME(), _FILETIME()
+        )
+        ok = ctypes.windll.kernel32.GetProcessTimes(
+            h,
+            ctypes.byref(creation),
+            ctypes.byref(exit_),
+            ctypes.byref(kernel),
+            ctypes.byref(user_t),
+        )
+        if not ok:
+            return None
+        return _ft_to_us(kernel) + _ft_to_us(user_t)
+    finally:
+        ctypes.windll.kernel32.CloseHandle(h)
+
+
+def _find_npsm() -> tuple[str, int] | None:
+    """Возвращает (имя службы, PID процесса) или None."""
+    try:
+        out = subprocess.check_output(
+            [
+                "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                "$s = Get-CimInstance Win32_Service -Filter \"Name like 'NPSMSvc%'\" | Select-Object -First 1; "
+                "if ($s) { Write-Output \"$($s.Name)|$($s.ProcessId)\" }",
+            ],
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            creationflags=0x08000000,  # CREATE_NO_WINDOW
+        ).decode("utf-8", errors="ignore").strip()
+        if "|" in out:
+            name, pid_s = out.split("|", 1)
+            return name.strip(), int(pid_s.strip())
+    except Exception:
+        pass
+    return None
+
+
+def _restart_service(name: str) -> bool:
+    try:
+        r = subprocess.run(
+            [
+                "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                f"Restart-Service -Name '{name}' -Force -ErrorAction Stop",
+            ],
+            stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            timeout=15,
+            creationflags=0x08000000,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+class NpsmWatchdog(QObject):
+    """Перезапускает NPSMSvc если у неё затяжное high-CPU."""
+
+    restarted = Signal(float)  # передаёт измеренный % CPU перед рестартом
+
+    CHECK_INTERVAL_MS = 15_000      # проверяем раз в 15 сек
+    CPU_THRESHOLD_PCT = 30.0        # > 30% одного ядра = аномалия
+    BREACHES_NEEDED = 2             # 2 проверки подряд → рестарт (~30 сек high-CPU)
+    COOLDOWN_S = 300.0              # 5 мин не трогаем после рестарта
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._enabled = False
+        self._svc_name: str | None = None
+        self._svc_pid: int | None = None
+        self._prev_cpu_us: float | None = None
+        self._prev_wall: float | None = None
+        self._breaches = 0
+        self._last_restart_at = 0.0
+        self._timer = QTimer(self)
+        self._timer.setInterval(self.CHECK_INTERVAL_MS)
+        self._timer.timeout.connect(self._check)
+
+    def start(self) -> None:
+        if self._enabled:
+            return
+        self._enabled = True
+        self._refresh_svc()
+        self._timer.start()
+
+    def stop(self) -> None:
+        self._enabled = False
+        self._timer.stop()
+
+    def _refresh_svc(self) -> None:
+        info = _find_npsm()
+        if info is None:
+            self._svc_name, self._svc_pid = None, None
+            return
+        self._svc_name, self._svc_pid = info
+        self._prev_cpu_us = None
+        self._prev_wall = None
+        self._breaches = 0
+
+    def _check(self) -> None:
+        if not self._enabled:
+            return
+        if self._svc_pid is None:
+            self._refresh_svc()
+            if self._svc_pid is None:
+                return
+
+        now_wall = time.monotonic()
+        cpu_us = _get_process_cpu_us(self._svc_pid)
+        if cpu_us is None:
+            # Процесс пропал (служба остановлена/перезапущена) — освежим.
+            self._refresh_svc()
+            return
+
+        if self._prev_cpu_us is None or self._prev_wall is None:
+            self._prev_cpu_us = cpu_us
+            self._prev_wall = now_wall
+            return
+
+        d_cpu = cpu_us - self._prev_cpu_us
+        d_wall = now_wall - self._prev_wall
+        self._prev_cpu_us = cpu_us
+        self._prev_wall = now_wall
+        if d_wall <= 0:
+            return
+
+        # cpu_us — микросекунды CPU-времени. Доля одного ядра = d_cpu / (d_wall*1e6).
+        cpu_pct_one_core = (d_cpu / (d_wall * 1_000_000.0)) * 100.0
+
+        if cpu_pct_one_core <= self.CPU_THRESHOLD_PCT:
+            self._breaches = 0
+            return
+
+        self._breaches += 1
+        if self._breaches < self.BREACHES_NEEDED:
+            return
+
+        if (now_wall - self._last_restart_at) < self.COOLDOWN_S:
+            return  # ещё в cooldown — не дёргаем
+
+        # Поехали — рестартуем службу.
+        name = self._svc_name or ""
+        if name and _restart_service(name):
+            self._last_restart_at = now_wall
+            self._breaches = 0
+            self.restarted.emit(cpu_pct_one_core)
+            # Дадим службе ~2 сек подняться, потом обновим PID.
+            QTimer.singleShot(2000, self._refresh_svc)

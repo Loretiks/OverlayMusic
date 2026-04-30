@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -39,6 +40,7 @@ else:
     from _platform_win import (  # type: ignore
         MediaController,
         HotkeyManager,
+        NpsmWatchdog,
         force_foreground,
         BACKEND_ERR as _BACKEND_ERR,
     )
@@ -103,6 +105,10 @@ from PySide6.QtWidgets import (
 # Settings
 # --------------------------------------------------------------------------
 APP_NAME = "OverlayMusic"
+# Должна совпадать с MyAppVersion в installer.iss — используется для сравнения
+# с tag_name последнего GitHub-релиза при проверке обновлений.
+APP_VERSION = "1.2.2"
+GITHUB_REPO = "Loretiks/OverlayMusic"
 
 # Discord Application ID — зашит дефолтом, поле в настройках можно не трогать.
 # Это твоё личное приложение на discord.com/developers (имя "Melanholy").
@@ -485,6 +491,94 @@ class DiscordPresence:
     def shutdown(self) -> None:
         with self._lock:
             self._disconnect_locked()
+
+
+# --------------------------------------------------------------------------
+# Auto-updater (GitHub Releases)
+# --------------------------------------------------------------------------
+def _version_tuple(v: str) -> tuple:
+    """'1.2.10' -> (1, 2, 10). Сравнение тогда работает покомпонентно."""
+    out: list[int] = []
+    for part in (v or "").lstrip("v").replace("-", ".").split("."):
+        try:
+            out.append(int(part))
+        except ValueError:
+            out.append(0)
+    return tuple(out)
+
+
+class UpdateChecker(QObject):
+    """Фоновая проверка GitHub Releases. Сигналит когда есть свежее.
+    Также умеет скачать и запустить установщик."""
+
+    update_available = Signal(str, str)  # (version, installer_url)
+    download_started = Signal()
+    download_failed = Signal(str)        # сообщение об ошибке
+    ready_to_install = Signal(str)       # путь к скачанному exe
+
+    def __init__(self, repo: str, current_version: str, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._repo = repo
+        self._current = current_version
+        self._busy = False
+
+    def check(self) -> None:
+        if self._busy:
+            return
+        self._busy = True
+        threading.Thread(target=self._check_worker, daemon=True).start()
+
+    def _check_worker(self) -> None:
+        try:
+            req = urllib.request.Request(
+                f"https://api.github.com/repos/{self._repo}/releases/latest",
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": f"{APP_NAME}/{self._current}",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = json.loads(r.read().decode("utf-8", errors="ignore"))
+            tag = (data.get("tag_name") or "").strip()
+            if not tag:
+                return
+            latest_v = _version_tuple(tag)
+            if latest_v <= _version_tuple(self._current):
+                return
+            for asset in data.get("assets") or []:
+                name = asset.get("name") or ""
+                if name.startswith(f"{APP_NAME}-Setup-") and name.endswith(".exe"):
+                    url = asset.get("browser_download_url") or ""
+                    if url:
+                        self.update_available.emit(tag.lstrip("v"), url)
+                        return
+        except Exception:
+            pass
+        finally:
+            self._busy = False
+
+    def download_and_run(self, version: str, url: str) -> None:
+        threading.Thread(
+            target=self._download_worker, args=(version, url), daemon=True
+        ).start()
+
+    def _download_worker(self, version: str, url: str) -> None:
+        self.download_started.emit()
+        try:
+            import tempfile
+            target = Path(tempfile.gettempdir()) / f"{APP_NAME}-Setup-{version}.exe"
+            req = urllib.request.Request(
+                url, headers={"User-Agent": f"{APP_NAME}/{self._current}"}
+            )
+            with urllib.request.urlopen(req, timeout=120) as r, open(target, "wb") as f:
+                while True:
+                    chunk = r.read(64 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            self.ready_to_install.emit(str(target))
+        except Exception as e:
+            self.download_failed.emit(str(e))
 
 
 # --------------------------------------------------------------------------
@@ -1480,6 +1574,18 @@ class App(QObject):
         self.media.info_updated.connect(self.window.apply_info)
         self.media.info_updated.connect(self._on_media_info)
 
+        # Watchdog NPSMSvc — автоматически перезапускает службу при затяжной
+        # high-CPU аномалии (известный баг Windows: служба застревает после
+        # некорректного disconnect SMTC-клиента).
+        self.npsm_watchdog = None
+        if sys.platform == "win32":
+            try:
+                self.npsm_watchdog = NpsmWatchdog(self)
+                self.npsm_watchdog.restarted.connect(self._on_npsm_restarted)
+                self.npsm_watchdog.start()
+            except Exception:
+                self.npsm_watchdog = None
+
         self.discord = DiscordPresence()
         self.discord.configure(
             self.settings.get("discord_enabled", False),
@@ -1498,15 +1604,35 @@ class App(QObject):
         ok = self.hotkey.start(self.settings["hotkey_toggle"])
 
         self.tray = QSystemTrayIcon(make_tray_icon(), self)
-        self.tray.setToolTip(f"OverlayMusic ({self.settings['hotkey_toggle']})")
+        self.tray.setToolTip(f"OverlayMusic v{APP_VERSION} ({self.settings['hotkey_toggle']})")
         menu = QMenu()
         menu.addAction("Показать / скрыть").triggered.connect(self.toggle_window)
         menu.addAction("Настройки…").triggered.connect(self.open_settings)
+        menu.addSeparator()
+        # Пункт обновления — скрыт пока нет доступной версии.
+        self.update_action = menu.addAction("Установить обновление")
+        self.update_action.setVisible(False)
+        self.update_action.triggered.connect(self._on_update_clicked)
         menu.addSeparator()
         menu.addAction("Выход").triggered.connect(self.quit)
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(self._tray_activated)
         self.tray.show()
+
+        # Auto-updater
+        self._pending_update: tuple[str, str] | None = None  # (version, url)
+        self.updater = UpdateChecker(GITHUB_REPO, APP_VERSION, self)
+        self.updater.update_available.connect(self._on_update_available)
+        self.updater.download_started.connect(self._on_download_started)
+        self.updater.download_failed.connect(self._on_download_failed)
+        self.updater.ready_to_install.connect(self._on_ready_to_install)
+        # Первая проверка через 5 сек после старта (даём UI прогрузиться)
+        QTimer.singleShot(5000, self.updater.check)
+        # Повторная проверка каждые 6 часов
+        self._update_check_timer = QTimer(self)
+        self._update_check_timer.setInterval(6 * 60 * 60 * 1000)
+        self._update_check_timer.timeout.connect(self.updater.check)
+        self._update_check_timer.start()
 
         if _BACKEND_ERR:
             self.tray.showMessage(
@@ -1540,6 +1666,78 @@ class App(QObject):
 
     def _on_media_info(self, info: dict) -> None:
         self.discord.push(info, self.settings.get("browser_provider", "yandex"))
+
+    def _on_npsm_restarted(self, cpu_pct: float) -> None:
+        try:
+            self.tray.showMessage(
+                "OverlayMusic",
+                f"Системная служба NPSMSvc застряла на {cpu_pct:.0f}% CPU — перезапущена автоматически.",
+                QSystemTrayIcon.Information,
+                4000,
+            )
+        except Exception:
+            pass
+
+    # --- auto-updater handlers ------------------------------------------
+    def _on_update_available(self, version: str, url: str) -> None:
+        # Не спамим уведомлением для одной и той же версии при повторных
+        # проверках. Покажем один раз; пункт меню остаётся доступен.
+        prev = self._pending_update[0] if self._pending_update else None
+        self._pending_update = (version, url)
+        self.update_action.setText(f"Установить обновление v{version}")
+        self.update_action.setVisible(True)
+        if prev != version:
+            self.tray.showMessage(
+                "OverlayMusic",
+                f"Доступна новая версия v{version}. Кликни «Установить обновление» в меню трея.",
+                QSystemTrayIcon.Information,
+                6000,
+            )
+
+    def _on_update_clicked(self) -> None:
+        if self._pending_update is None:
+            self.updater.check()
+            return
+        version, url = self._pending_update
+        self.updater.download_and_run(version, url)
+
+    def _on_download_started(self) -> None:
+        self.tray.showMessage(
+            "OverlayMusic",
+            "Скачиваю обновление…",
+            QSystemTrayIcon.Information, 3000,
+        )
+
+    def _on_download_failed(self, msg: str) -> None:
+        self.tray.showMessage(
+            "OverlayMusic",
+            f"Не удалось скачать обновление: {msg}",
+            QSystemTrayIcon.Warning, 5000,
+        )
+
+    def _on_ready_to_install(self, installer_path: str) -> None:
+        # Запускаем установщик и выходим — Inno Setup умеет апгрейдить по AppId,
+        # /FORCECLOSEAPPLICATIONS на случай если мы не успели завершиться.
+        try:
+            subprocess.Popen(
+                [
+                    installer_path,
+                    "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
+                    "/FORCECLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS",
+                ],
+                creationflags=0x00000008,  # DETACHED_PROCESS
+                close_fds=True,
+            )
+        except Exception as e:
+            self.tray.showMessage(
+                "OverlayMusic",
+                f"Не удалось запустить установщик: {e}",
+                QSystemTrayIcon.Warning, 5000,
+            )
+            return
+        # Даём установщику секунду схватить файл, потом выходим — он сам
+        # запустит обновлённую программу через scheduled task / RESTARTAPPLICATIONS.
+        QTimer.singleShot(800, self.quit)
 
     def _tray_activated(self, reason) -> None:
         if reason == QSystemTrayIcon.Trigger:
@@ -1620,6 +1818,8 @@ class App(QObject):
             self.hotkey.stop()
             self.media.shutdown()
             self.discord.shutdown()
+            if self.npsm_watchdog is not None:
+                self.npsm_watchdog.stop()
         finally:
             self.qapp.quit()
 
