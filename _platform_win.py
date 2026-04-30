@@ -181,9 +181,18 @@ class MediaController(QObject):
         self._pos_baseline_at: float = time.monotonic()
         self._last_track_key: tuple | None = None
         self._zero_streak: int = 0
+        # Кэши для снижения нагрузки на NPSMSvc:
+        #  • _mgr — singleton MediaManager (request_async тоже IPC)
+        #  • _thumb_cache — байты обложки по track_key (это самая дорогая часть
+        #    poll-цикла, без кэша мы тащили бы по IPC ~50 KB каждые 250 мс).
+        self._mgr = None
+        self._thumb_cache_key: tuple | None = None
+        self._thumb_cache_bytes: bytes | None = None
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self.poll)
-        self._poll_timer.start(250)
+        # 500 мс достаточно: прогресс-бар тикает локально через интерполяцию,
+        # реальный poll нужен лишь для смены трека / play-pause / коррекции.
+        self._poll_timer.start(500)
 
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self._loop)
@@ -203,7 +212,9 @@ class MediaController(QObject):
 
     async def _poll_async(self) -> None:
         try:
-            mgr = await MediaManager.request_async()
+            if self._mgr is None:
+                self._mgr = await MediaManager.request_async()
+            mgr = self._mgr
             session = self._pick_session(mgr)
             if session is None:
                 self.info_updated.emit({"available": False, "reason": "Откройте трек в плеере"})
@@ -212,13 +223,6 @@ class MediaController(QObject):
             playback = session.get_playback_info()
             timeline = session.get_timeline_properties()
 
-            thumb_bytes: bytes | None = None
-            if props.thumbnail is not None:
-                try:
-                    thumb_bytes = await self._read_thumbnail(props.thumbnail)
-                except Exception:
-                    thumb_bytes = None
-
             raw_pos = timeline.position.total_seconds() if timeline.position else 0.0
             dur = timeline.end_time.total_seconds() if timeline.end_time else 0.0
             is_playing = int(playback.playback_status) == int(PlaybackStatus.PLAYING)
@@ -226,6 +230,20 @@ class MediaController(QObject):
             now = time.monotonic()
             track_key = (props.title or "", props.artist or "", round(dur, 1))
             track_changed = track_key != self._last_track_key
+
+            # Обложка: тащим байты только если трек реально сменился.
+            # Раньше read_thumbnail вызывался каждые 250 мс — это и было
+            # главной причиной нагрузки на NPSMSvc.
+            thumb_bytes: bytes | None = self._thumb_cache_bytes
+            if track_changed or self._thumb_cache_key != track_key:
+                thumb_bytes = None
+                if props.thumbnail is not None:
+                    try:
+                        thumb_bytes = await self._read_thumbnail(props.thumbnail)
+                    except Exception:
+                        thumb_bytes = None
+                self._thumb_cache_key = track_key
+                self._thumb_cache_bytes = thumb_bytes
 
             if is_playing and raw_pos < 0.5 and not track_changed:
                 self._zero_streak += 1
@@ -269,6 +287,9 @@ class MediaController(QObject):
             }
             self.info_updated.emit(info)
         except Exception as e:
+            # Сбросим кэш менеджера — возможно NPSMSvc перезапустился и наш
+            # singleton stale; следующий poll возьмёт новый.
+            self._mgr = None
             self.info_updated.emit({"available": False, "reason": f"SMTC: {e}"})
 
     def _pick_session(self, mgr):
