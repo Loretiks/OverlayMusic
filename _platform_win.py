@@ -172,6 +172,12 @@ class HotkeyManager(QObject):
 class MediaController(QObject):
     info_updated = Signal(dict)
 
+    # Как часто разрешаем повторно запрашивать try_get_media_properties_async —
+    # это самая дорогая часть poll-цикла (NPSMSvc сериализует title/artist/
+    # album/genres/track-id/обложку и шлёт через IPC). Раньше дёргалось каждые
+    # 250 мс; теперь — только при смене длительности трека ИЛИ раз в 5 сек.
+    PROPS_REFRESH_S = 5.0
+
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._loop = asyncio.new_event_loop()
@@ -181,18 +187,20 @@ class MediaController(QObject):
         self._pos_baseline_at: float = time.monotonic()
         self._last_track_key: tuple | None = None
         self._zero_streak: int = 0
-        # Кэши для снижения нагрузки на NPSMSvc:
-        #  • _mgr — singleton MediaManager (request_async тоже IPC)
-        #  • _thumb_cache — байты обложки по track_key (это самая дорогая часть
-        #    poll-цикла, без кэша мы тащили бы по IPC ~50 KB каждые 250 мс).
-        self._mgr = None
+        # Кэши для снижения нагрузки на NPSMSvc.
+        self._mgr = None                  # MediaManager singleton
+        self._cached_session = None       # последняя session-обёртка
+        self._cached_aumid: str = ""      # source_app_user_model_id (IPC при каждом get!)
+        self._cached_props = None         # последние media-properties
+        self._cached_props_dur: float = -1.0
+        self._cached_props_at: float = 0.0
         self._thumb_cache_key: tuple | None = None
         self._thumb_cache_bytes: bytes | None = None
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self.poll)
-        # 500 мс достаточно: прогресс-бар тикает локально через интерполяцию,
-        # реальный poll нужен лишь для смены трека / play-pause / коррекции.
-        self._poll_timer.start(500)
+        # 1 секунда — прогресс-бар интерполируется локально через monotonic-
+        # baseline, реальная нагрузка нужна только для смены трека / play-pause.
+        self._poll_timer.start(1000)
 
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self._loop)
@@ -217,25 +225,65 @@ class MediaController(QObject):
             mgr = self._mgr
             session = self._pick_session(mgr)
             if session is None:
+                # Сбрасываем кэшированную сессию — иначе при возврате музыки
+                # будем держать stale объект.
+                self._cached_session = None
+                self._cached_aumid = ""
+                self._cached_props = None
                 self.info_updated.emit({"available": False, "reason": "Откройте трек в плеере"})
                 return
-            props = await session.try_get_media_properties_async()
+
+            # Эти два get_*_properties — sync-обёртки над IPC, но дёшевые
+            # (несколько байт state, без metadata-сериализации).
             playback = session.get_playback_info()
             timeline = session.get_timeline_properties()
 
             raw_pos = timeline.position.total_seconds() if timeline.position else 0.0
             dur = timeline.end_time.total_seconds() if timeline.end_time else 0.0
             is_playing = int(playback.playback_status) == int(PlaybackStatus.PLAYING)
-
             now = time.monotonic()
-            track_key = (props.title or "", props.artist or "", round(dur, 1))
+            dur_key = round(dur, 1)
+
+            # source_app_user_model_id — каждое чтение тоже IPC. Берём только
+            # при смене session-объекта.
+            if session is not self._cached_session:
+                try:
+                    self._cached_aumid = session.source_app_user_model_id or ""
+                except Exception:
+                    self._cached_aumid = ""
+                self._cached_session = session
+                # Новая сессия — props-кэш точно невалиден.
+                self._cached_props = None
+
+            # Решаем нужно ли обновлять props (самая дорогая операция):
+            #  • первый раз
+            #  • сменилась длительность (= новый трек)
+            #  • прошло PROPS_REFRESH_S сек (страховка для плееров без duration,
+            #    например Yandex.Music — title/artist всё-таки обновятся)
+            need_props_refresh = (
+                self._cached_props is None
+                or self._cached_props_dur != dur_key
+                or (now - self._cached_props_at) > self.PROPS_REFRESH_S
+            )
+            if need_props_refresh:
+                try:
+                    self._cached_props = await session.try_get_media_properties_async()
+                    self._cached_props_dur = dur_key
+                    self._cached_props_at = now
+                except Exception:
+                    pass
+            props = self._cached_props
+            if props is None:
+                # Совсем не удалось забрать metadata — отдаём заглушку, не кидаем UI в "нет музыки"
+                self.info_updated.emit({"available": False, "reason": "Жду метаданные…"})
+                return
+
+            track_key = (props.title or "", props.artist or "", dur_key)
             track_changed = track_key != self._last_track_key
 
-            # Обложка: тащим байты только если трек реально сменился.
-            # Раньше read_thumbnail вызывался каждые 250 мс — это и было
-            # главной причиной нагрузки на NPSMSvc.
+            # Обложка: тащим байты только при смене трека.
             thumb_bytes: bytes | None = self._thumb_cache_bytes
-            if track_changed or self._thumb_cache_key != track_key:
+            if self._thumb_cache_key != track_key:
                 thumb_bytes = None
                 if props.thumbnail is not None:
                     try:
@@ -283,7 +331,7 @@ class MediaController(QObject):
                 "position": effective_pos,
                 "duration": dur,
                 "position_reliable": position_reliable,
-                "source": session.source_app_user_model_id or "",
+                "source": self._cached_aumid,
             }
             self.info_updated.emit(info)
         except Exception as e:
@@ -293,16 +341,20 @@ class MediaController(QObject):
             self.info_updated.emit({"available": False, "reason": f"SMTC: {e}"})
 
     def _pick_session(self, mgr):
+        # get_current_session — 1 IPC. Раньше мы первым делом дёргали
+        # get_sessions() и итерировали все — каждая s.source_app_user_model_id
+        # это ещё IPC. У пользователя с Discord/GTA/Edge может быть 5+ сессий,
+        # это давало 6+ лишних IPC к NPSMSvc на каждом poll-цикле.
+        try:
+            cur = mgr.get_current_session()
+        except Exception:
+            cur = None
+        if cur is not None:
+            return cur
+        # Fallback: если current нет — берём первую попавшуюся медиа-сессию.
         try:
             sessions = mgr.get_sessions()
-            for s in sessions:
-                aumid = (s.source_app_user_model_id or "").lower()
-                if "spotify" in aumid:
-                    return s
-        except Exception:
-            pass
-        try:
-            return mgr.get_current_session()
+            return sessions[0] if sessions and len(sessions) > 0 else None
         except Exception:
             return None
 
