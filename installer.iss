@@ -4,7 +4,7 @@
 #define MyAppName       "Overlay Music"
 #define MyAppShortName  "OverlayMusic"
 #define MyAppVersion    "1.0.0"
-#define MyAppPublisher  "Ilyushka"
+#define MyAppPublisher  "Melanholy"
 #define MyAppExeName    "OverlayMusic.exe"
 
 [Setup]
