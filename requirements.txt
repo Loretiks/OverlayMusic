@@ -1,0 +1,12 @@
+PySide6>=6.8
+pypresence>=4.3.0
+
+# Windows-only: SMTC через WinRT
+winrt-Windows.Media.Control>=2.0.0; sys_platform == 'win32'
+winrt-Windows.Storage.Streams>=2.0.0; sys_platform == 'win32'
+winrt-Windows.Foundation>=2.0.0; sys_platform == 'win32'
+
+# macOS-only: pyobjc для MediaRemote и NSEvent global hotkey
+pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'
+pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'
+pyobjc-framework-libdispatch>=10.0; sys_platform == 'darwin'
