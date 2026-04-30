@@ -158,6 +158,11 @@ CI workflow в `.github/workflows/build.yml`:
 - **Mac-версия не подписана** Apple Developer ID. При первом запуске нужен ПКМ → Open. Без warning-а — нужен Apple Developer ($99/год) и notarization.
 - **MediaRemote.framework** на macOS — приватный API Apple. Стабилен годами (его используют Sleeve, NepTunes, Music Bar и др.), но официально не поддерживается.
 
+## Contributors
+
+<a href="https://github.com/Loretiks"><img src="https://avatars.githubusercontent.com/u/Loretiks?s=64" width="64" alt="Loretiks" title="Loretiks" style="border-radius:50%"></a>
+<a href="https://github.com/sjsjsjsjsjsjalqo"><img src="https://avatars.githubusercontent.com/u/59309044?s=64" width="64" alt="sjsjsjsjsjsjalqo" title="sjsjsjsjsjsjalqo" style="border-radius:50%"></a>
+
 ## Лицензия
 
 [MIT](LICENSE) — пользуйся как хочешь.
