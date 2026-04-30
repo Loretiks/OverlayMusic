@@ -1076,6 +1076,11 @@ class OverlayWindow(QWidget):
         self.setFocusPolicy(Qt.StrongFocus)
         self.resize(480, 168)
 
+        self._save_pos_timer = QTimer(self)
+        self._save_pos_timer.setSingleShot(True)
+        self._save_pos_timer.setInterval(500)
+        self._save_pos_timer.timeout.connect(self._persist_position)
+
         self._build_ui()
         self._apply_style()
         self._build_shortcuts()
@@ -1313,8 +1318,17 @@ class OverlayWindow(QWidget):
         p.restore()
 
     # --- dragging --------------------------------------------------------
+    # Используем нативный startSystemMove() — окном двигает Windows, Qt не
+    # перерисовывает кадры во время drag. Это убирает провисание frameless+
+    # translucent окна при быстром перемещении. Позиция сохраняется в
+    # debounce-таймере по moveEvent.
     def mousePressEvent(self, e) -> None:
         if e.button() == Qt.LeftButton:
+            wh = self.windowHandle()
+            if wh is not None and wh.startSystemMove():
+                e.accept()
+                return
+            # Fallback (Qt < 5.15 или платформа без поддержки).
             self._dragging = True
             self._drag_offset = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
 
@@ -1325,9 +1339,16 @@ class OverlayWindow(QWidget):
     def mouseReleaseEvent(self, e) -> None:
         if self._dragging:
             self._dragging = False
-            self._settings["x"] = self.x()
-            self._settings["y"] = self.y()
-            save_settings(self._settings)
+            # Позицию из fallback-пути сохранит moveEvent → _save_pos_timer.
+
+    def moveEvent(self, e) -> None:
+        super().moveEvent(e)
+        self._save_pos_timer.start()
+
+    def _persist_position(self) -> None:
+        self._settings["x"] = self.x()
+        self._settings["y"] = self.y()
+        save_settings(self._settings)
 
     def _set_paused_state(self, paused: bool) -> None:
         self.progress.set_paused(paused)
