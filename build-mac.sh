@@ -21,8 +21,10 @@ if [ -z "$MC_CELLAR" ]; then
 fi
 echo "Bundling media-control from: $MC_CELLAR"
 
-# Activate venv
-source .venv/bin/activate
+# Activate venv if it exists (local dev). In CI, system Python is already active.
+if [ -f .venv/bin/activate ]; then
+  source .venv/bin/activate
+fi
 
 # Clean previous build artifacts
 rm -rf "$BUILD_DIR" "$APP_PATH" "$DIST_DIR/$APP_NAME" "$DMG_PATH"
