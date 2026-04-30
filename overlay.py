@@ -121,6 +121,7 @@ DEFAULT_SETTINGS = {
     "discord_enabled": False,
     "discord_client_id": "",
     "browser_provider": "yandex",  # yandex | youtube | spotify | apple
+    "transparent_mode": False,
 }
 
 BROWSER_PROVIDERS = [
@@ -941,6 +942,23 @@ class SettingsDialog(QDialog):
             warn.setWordWrap(True)
             root.addWidget(warn)
 
+        root.addSpacing(10)
+        appearance_lbl = QLabel("<b>Внешний вид</b>:")
+        root.addWidget(appearance_lbl)
+        self.transparent_check = QCheckBox(
+            "Полностью прозрачный режим (без подложки и затемнения)"
+        )
+        self.transparent_check.setChecked(bool(settings.get("transparent_mode")))
+        root.addWidget(self.transparent_check)
+        t_hint = QLabel(
+            "Скрывает фон оверлея — остаются только обложка, текст и кнопки. "
+            "Удобно поверх тёмных игр; на светлом фоне текст может быть плохо читаем.",
+            self,
+        )
+        t_hint.setStyleSheet("color: #888; font-size: 9pt;")
+        t_hint.setWordWrap(True)
+        root.addWidget(t_hint)
+
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
         bb.button(QDialogButtonBox.Ok).setText("Сохранить")
         bb.button(QDialogButtonBox.Cancel).setText("Отмена")
@@ -957,6 +975,7 @@ class SettingsDialog(QDialog):
             "discord_enabled": self.discord_enabled.isChecked(),
             "discord_client_id": self.discord_id_edit.text().strip(),
             "browser_provider": self.browser_combo.currentData() or "yandex",
+            "transparent_mode": self.transparent_check.isChecked(),
         }
 
 
@@ -977,6 +996,7 @@ class OverlayWindow(QWidget):
         self._backdrop: QPixmap | None = None
         self._accent: QColor = ACCENT_DEFAULT
         self._last_thumb_hash: int = 0
+        self._transparent_mode: bool = bool(settings.get("transparent_mode"))
 
         self.setWindowFlags(
             Qt.FramelessWindowHint
@@ -1097,6 +1117,12 @@ class OverlayWindow(QWidget):
         self.sc_next.setKey(QKeySequence(nxt))
         self.sc_play.setKey(QKeySequence(play))
 
+    def set_transparent_mode(self, enabled: bool) -> None:
+        if self._transparent_mode == bool(enabled):
+            return
+        self._transparent_mode = bool(enabled)
+        self.update()
+
     def _apply_style(self) -> None:
         self.setStyleSheet(
             """
@@ -1162,6 +1188,10 @@ class OverlayWindow(QWidget):
 
     # --- painting (rounded acrylic with cover-backdrop) ------------------
     def paintEvent(self, _) -> None:
+        if self._transparent_mode:
+            # Полностью прозрачный режим: фон, подложку и тень не рисуем —
+            # видны только обложка, текст и кнопки.
+            return
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         rect = self.rect().adjusted(2, 2, -2, -2)
@@ -1323,6 +1353,7 @@ class App(QObject):
         self._prev_hwnd: int = 0
 
         self.window = OverlayWindow(self.settings)
+        self.window.set_transparent_mode(self.settings.get("transparent_mode", False))
         self.window.prev_btn.clicked.connect(lambda: self.media.prev_track())
         self.window.play_btn.clicked.connect(lambda: self.media.toggle_play())
         self.window.next_btn.clicked.connect(lambda: self.media.next_track())
@@ -1444,18 +1475,17 @@ class App(QObject):
             return
         new = dlg.values()
 
-        # Validate global hotkey: must contain a key (and ideally a modifier).
-        toggle_mods, toggle_vk = parse_hotkey(new["hotkey_toggle"])
-        if toggle_vk is None:
+        if not (new.get("hotkey_toggle") or "").strip():
             self.tray.showMessage(
                 "OverlayMusic",
-                "Невалидный глобальный хоткей.",
+                "Глобальный хоткей не задан.",
                 QSystemTrayIcon.Warning, 3000)
             return
 
         self.settings.update(new)
         save_settings(self.settings)
         self._apply_local_hotkeys()
+        self.window.set_transparent_mode(self.settings.get("transparent_mode", False))
         self.discord.configure(
             self.settings.get("discord_enabled", False),
             self.settings.get("discord_client_id", ""),
