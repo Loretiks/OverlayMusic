@@ -160,8 +160,12 @@ CI workflow в `.github/workflows/build.yml`:
 
 ## Contributors
 
-<a href="https://github.com/Loretiks"><img src="https://avatars.githubusercontent.com/u/Loretiks?s=64" width="64" alt="Loretiks" title="Loretiks" style="border-radius:50%"></a>
-<a href="https://github.com/sjsjsjsjsjsjalqo"><img src="https://avatars.githubusercontent.com/u/59309044?s=64" width="64" alt="sjsjsjsjsjsjalqo" title="sjsjsjsjsjsjalqo" style="border-radius:50%"></a>
+<a href="https://github.com/Loretiks">
+  <img src="https://github.com/Loretiks.png?size=72" width="72" height="72" alt="Loretiks" title="Loretiks">
+</a>
+<a href="https://github.com/sjsjsjsjsjsjalqo">
+  <img src="https://github.com/sjsjsjsjsjsjalqo.png?size=72" width="72" height="72" alt="sjsjsjsjsjsjalqo" title="sjsjsjsjsjsjalqo">
+</a>
 
 ## Лицензия
 
